@@ -1,0 +1,155 @@
+name: Build AdvancedPanel
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  # ---------------------------------------------------------------- macOS dylib
+  macos-dylib:
+    name: macOS universal dylib
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/macos \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DAP_BUILD_EXAMPLES=OFF
+
+      - name: Build
+        run: cmake --build build/macos --config ${{ env.BUILD_TYPE }} -j $(sysctl -n hw.ncpu)
+
+      - name: Verify universal slice
+        run: lipo -info build/macos/libadvanced_panel.dylib | grep -q "arm64 x86_64"
+
+      - name: Verify exported ABI
+        run: |
+          nm -gU build/macos/libadvanced_panel.dylib | grep -q "_ap_create"
+          nm -gU build/macos/libadvanced_panel.dylib | grep -q "_ap_serialize"
+
+      - name: Package
+        run: |
+          mkdir -p dist/lib dist/include
+          cp build/macos/libadvanced_panel.dylib dist/lib/
+          cp advanced_panel.h APAdvancedPanel.h dist/include/
+          zip -r AdvancedPanel-macos.zip dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AdvancedPanel-macos
+          path: AdvancedPanel-macos.zip
+
+  # --------------------------------------------------------------- iOS xcframework
+  ios-xcframework:
+    name: iOS xcframework
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build device slice
+        run: |
+          cmake -S . -B build/ios-device \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DAP_BUILD_EXAMPLES=OFF
+
+      - name: Build simulator slice
+        run: |
+          cmake -S . -B build/ios-sim \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphonesimulator \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DAP_BUILD_EXAMPLES=OFF
+
+      - name: Compile
+        run: |
+          cmake --build build/ios-device --config ${{ env.BUILD_TYPE }} -j $(sysctl -n hw.ncpu)
+          cmake --build build/ios-sim    --config ${{ env.BUILD_TYPE }} -j $(sysctl -n hw.ncpu)
+
+      - name: Assemble xcframework
+        run: |
+          for slice in device sim; do
+            mkdir -p build/lib-$slice/lib build/lib-$slice/include/AdvancedPanel
+            libtool -static -o build/lib-$slice/lib/libadvanced_panel.a \
+              build/ios-$slice/CMakeFiles/advanced_panel.dir/panel.cpp.o \
+              build/ios-$slice/CMakeFiles/AdvancedPanelObjC.dir/APAdvancedPanel.mm.o
+            cp advanced_panel.h APAdvancedPanel.h build/lib-$slice/include/AdvancedPanel/
+          done
+          mkdir -p dist
+          xcodebuild -create-xcframework \
+            -library build/lib-device/lib/libadvanced_panel.a \
+            -headers build/lib-device/include \
+            -library build/lib-sim/lib/libadvanced_panel.a \
+            -headers build/lib-sim/include \
+            -output dist/advanced_panel.xcframework
+          cd dist && zip -r -y ../AdvancedPanel-ios.zip advanced_panel.xcframework
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AdvancedPanel-ios
+          path: AdvancedPanel-ios.zip
+
+  # ------------------------------------------------------------------- C# binding
+  csharp-binding:
+    name: C# binding
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore AdvancedPanel.csproj
+
+      - name: Build
+        run: dotnet build AdvancedPanel.csproj -c ${{ env.BUILD_TYPE }} --no-restore
+
+      - name: Pack
+        run: dotnet pack AdvancedPanel.csproj -c ${{ env.BUILD_TYPE }} --no-build -o dist/nuget
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AdvancedPanel-nuget
+          path: dist/nuget/*.nupkg
+
+  # -------------------------------------------------------------------- release
+  release:
+    name: Publish release
+    needs: [macos-dylib, ios-xcframework, csharp-binding]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name "*.zip" -o -name "*.nupkg" \) -exec cp {} release/ \;
+          ls -la release
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
