@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>AdvancedPanel</RootNamespace>
+    <AssemblyName>AdvancedPanel</AssemblyName>
+    <Version>1.0.0</Version>
+    <Authors>Sotos</Authors>
+    <Copyright>Copyright (c) 2026 Sotos. All rights reserved.</Copyright>
+    <Description>Managed binding for the AdvancedPanel native dylib.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <!-- Flat layout: the example lives beside the library, so list sources explicitly. -->
+  <ItemGroup>
+    <Compile Include="NativeMethods.cs" />
+    <Compile Include="Panel.cs" />
+  </ItemGroup>
+
+</Project>
